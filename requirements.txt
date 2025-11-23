@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+feedparser
+transformers
+torch
+supabase
+python-dotenv
+requests
+httpx
+pydantic
