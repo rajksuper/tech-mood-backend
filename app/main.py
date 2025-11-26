@@ -275,6 +275,7 @@ def get_trending():
     
     return {"trending": [{"keyword": k.capitalize(), "count": c} for k, c in top_keywords[:10]]}
 
+
 # Get total article count (for pagination)
 @app.get("/articles/count")
 def get_article_count(category: str = None):
@@ -287,10 +288,9 @@ def get_article_count(category: str = None):
     return {"count": result.count}
 
 
-# Homepage - Returns 12 with images + 12 without images (with optional category filter)
-# Homepage - Returns all articles (combined)
+# Homepage - Returns articles sorted by published_at (newest first)
 @app.get("/articles")
-def get_articles(category: str = None, limit: int = 24):
+def get_articles(category: str = None, limit: int = 50):
     # Build base query
     query = supabase.table("articles").select("*")
 
@@ -298,17 +298,17 @@ def get_articles(category: str = None, limit: int = 24):
     if category:
         query = query.eq("category", category)
 
-    # Execute query
-    result = query.order("id", desc=True).limit(limit).execute()
+    # Execute query - SORT BY published_at DESC (newest first)
+    result = query.order("published_at", desc=True).limit(limit).execute()
 
     return {
         "articles": result.data
     }
 
 
-# Pagination - Returns next batch of articles
+# Pagination - Returns next batch of articles sorted by published_at
 @app.get("/articles/page/{page_num}")
-def get_articles_paginated(page_num: int, category: str = None, limit: int = 24):
+def get_articles_paginated(page_num: int, category: str = None, limit: int = 50):
     offset = page_num * limit
 
     # Build base query
@@ -318,8 +318,8 @@ def get_articles_paginated(page_num: int, category: str = None, limit: int = 24)
     if category:
         query = query.eq("category", category)
 
-    # Execute query
-    result = query.order("id", desc=True).range(offset, offset + limit - 1).execute()
+    # Execute query - SORT BY published_at DESC (newest first)
+    result = query.order("published_at", desc=True).range(offset, offset + limit - 1).execute()
 
     return {
         "articles": result.data
