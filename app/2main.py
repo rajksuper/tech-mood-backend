@@ -275,48 +275,52 @@ def get_trending():
     
     return {"trending": [{"keyword": k.capitalize(), "count": c} for k, c in top_keywords[:10]]}
 
+# Get total article count (for pagination)
+@app.get("/articles/count")
+def get_article_count(category: str = None):
+    query = supabase.table("articles").select("id", count="exact")
+    
+    if category:
+        query = query.eq("category", category)
+    
+    result = query.execute()
+    return {"count": result.count}
+
 
 # Homepage - Returns 12 with images + 12 without images (with optional category filter)
+# Homepage - Returns all articles (combined)
 @app.get("/articles")
-def get_articles(category: str = None):
+def get_articles(category: str = None, limit: int = 24):
     # Build base query
-    query_with = supabase.table("articles").select("*").not_.is_("image_url", "null").neq("image_url", "")
-    query_without = supabase.table("articles").select("*").or_("image_url.is.null,image_url.eq.")
-    
+    query = supabase.table("articles").select("*")
+
     # Add category filter if provided
     if category:
-        query_with = query_with.eq("category", category)
-        query_without = query_without.eq("category", category)
-    
-    # Execute queries
-    with_images = query_with.order("id", desc=True).limit(12).execute()
-    without_images = query_without.order("id", desc=True).limit(12).execute()
-    
+        query = query.eq("category", category)
+
+    # Execute query
+    result = query.order("id", desc=True).limit(limit).execute()
+
     return {
-        "with_images": with_images.data,
-        "without_images": without_images.data
+        "articles": result.data
     }
 
 
-# Pagination - Returns next batch of 12 with images + 12 without images (with optional category filter)
+# Pagination - Returns next batch of articles
 @app.get("/articles/page/{page_num}")
-def get_articles_paginated(page_num: int, category: str = None):
-    offset = page_num * 12
-    
+def get_articles_paginated(page_num: int, category: str = None, limit: int = 24):
+    offset = page_num * limit
+
     # Build base query
-    query_with = supabase.table("articles").select("*").not_.is_("image_url", "null").neq("image_url", "")
-    query_without = supabase.table("articles").select("*").or_("image_url.is.null,image_url.eq.")
-    
+    query = supabase.table("articles").select("*")
+
     # Add category filter if provided
     if category:
-        query_with = query_with.eq("category", category)
-        query_without = query_without.eq("category", category)
-    
-    # Execute queries
-    with_images = query_with.order("id", desc=True).range(offset, offset + 11).execute()
-    without_images = query_without.order("id", desc=True).range(offset, offset + 11).execute()
-    
+        query = query.eq("category", category)
+
+    # Execute query
+    result = query.order("id", desc=True).range(offset, offset + limit - 1).execute()
+
     return {
-        "with_images": with_images.data,
-        "without_images": without_images.data
+        "articles": result.data
     }

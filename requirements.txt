@@ -9,3 +9,5 @@ requests
 httpx
 pydantic
 beautifulsoup4
+apscheduler
+pytz
