@@ -1,11 +1,5 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
-import pytz
-import logging
-
 from app.rss_fetcher import fetch_articles
 from app.sentiment import analyze_sentiment
 from app.supabase_client import insert_article, supabase
@@ -14,12 +8,16 @@ import random
 from collections import Counter
 import re
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+app = FastAPI()
 
-# Initialize scheduler
-scheduler = BackgroundScheduler()
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # RSS Feed to Category Mapping (6 core categories)
@@ -121,139 +119,71 @@ def get_category(source_url, title="", summary=""):
     return "General Tech"
 
 
-def scheduled_fetch_articles():
-    """Function that runs on schedule to fetch and store articles"""
-    logger.info("🕐 Scheduled job started: Fetching articles...")
-    try:
-        articles = fetch_articles()
-        logger.info(f"📥 Fetched {len(articles)} articles")
-
-        random.shuffle(articles)
-        articles.sort(
-            key=lambda x: (x["published_at"] or "1970", random.random()),
-            reverse=True
-        )
-
-        # OPTIMIZATION: Batch check for existing URLs (in chunks of 100)
-        logger.info(f"Checking for duplicates in batches...")
-        all_urls = [item["source_url"] for item in articles]
-        
-        existing_urls = set()
-        batch_size = 100
-        
-        # Check URLs in batches to avoid URL too long error
-        for i in range(0, len(all_urls), batch_size):
-            batch = all_urls[i:i + batch_size]
-            existing_result = (
-                supabase.table("articles")
-                .select("source_url")
-                .in_("source_url", batch)
-                .execute()
-            )
-            existing_urls.update(row["source_url"] for row in existing_result.data)
-        
-        logger.info(f"Found {len(existing_urls)} existing articles")
-
-        saved = []
-        # Process only new articles
-        for item in articles:
-            # Skip if already exists
-            if item["source_url"] in existing_urls:
-                continue
-            
-            combined_text = f"{item['title']} {item['summary']}"
-            label, score, raw = analyze_sentiment(combined_text)
-
-            record = {
-                "title": item["title"],
-                "summary": item["summary"],
-                "source": item["source"],
-                "source_url": item["source_url"],
-                "sentiment_label": label,
-                "sentiment_score": raw['score'],
-                "raw_model_output": raw,
-                "created_at": datetime.utcnow().isoformat(),
-                "image_url": item.get("image_url"),
-                "published_at": item.get("published_at"),
-                "category": get_category(item["source_url"], item["title"], item["summary"]),
-            }
-
-            insert_article(record)
-            saved.append(record)
-            logger.info(f"✓ Inserted: {item['title'][:50]}...")
-
-        logger.info(f"✅ Scheduled job complete: Inserted {len(saved)} new articles, skipped {len(articles) - len(saved)}")
-        return {"inserted": len(saved), "skipped": len(articles) - len(saved)}
-    except Exception as e:
-        logger.error(f"❌ Scheduled job failed: {str(e)}")
-        return {"status": "error", "message": str(e)}
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Startup: Start the scheduler
-    la_timezone = pytz.timezone("America/Los_Angeles")
-    
-    # Run at 4 AM, 10 AM, 4 PM, 10 PM Los Angeles time
-    scheduler.add_job(
-        scheduled_fetch_articles,
-        CronTrigger(hour="4,10,16,22", minute=0, timezone=la_timezone),
-        id="fetch_articles_job",
-        name="Fetch articles every 6 hours",
-        replace_existing=True
-    )
-    
-    scheduler.start()
-    logger.info("🚀 Scheduler started - Articles will be fetched at 4 AM, 10 AM, 4 PM, 10 PM LA time")
-    
-    yield
-    
-    # Shutdown: Stop the scheduler
-    scheduler.shutdown()
-    logger.info("🛑 Scheduler stopped")
-
-
-app = FastAPI(lifespan=lifespan)
-
-# CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
 @app.get("/")
 def home():
-    return {
-        "status": "backend running",
-        "scheduler_status": "running" if scheduler.running else "stopped",
-        "scheduled_times": "4 AM, 10 AM, 4 PM, 10 PM (Los Angeles)"
-    }
+    return {"status": "backend running"}
 
 
 @app.get("/run")
 def run_pipeline():
-    """Manual endpoint to fetch articles (also runs on schedule)"""
-    return scheduled_fetch_articles()
+    articles = fetch_articles()
+    saved = []
 
+    random.shuffle(articles)
+    articles.sort(
+        key=lambda x: (x["published_at"] or "1970", random.random()),
+        reverse=True
+    )
 
-@app.get("/scheduler/status")
-def scheduler_status():
-    """Check scheduler status and next run times"""
-    jobs = []
-    for job in scheduler.get_jobs():
-        jobs.append({
-            "id": job.id,
-            "name": job.name,
-            "next_run": str(job.next_run_time)
-        })
-    return {
-        "running": scheduler.running,
-        "jobs": jobs
-    }
+    # OPTIMIZATION: Batch check for existing URLs (in chunks of 100)
+    print(f"Checking for duplicates in batches...")
+    all_urls = [item["source_url"] for item in articles]
+    
+    existing_urls = set()
+    batch_size = 100
+    
+    # Check URLs in batches to avoid URL too long error
+    for i in range(0, len(all_urls), batch_size):
+        batch = all_urls[i:i + batch_size]
+        existing_result = (
+            supabase.table("articles")
+            .select("source_url")
+            .in_("source_url", batch)
+            .execute()
+        )
+        existing_urls.update(row["source_url"] for row in existing_result.data)
+    
+    print(f"Found {len(existing_urls)} existing articles")
+
+    # Process only new articles
+    for item in articles:
+        # Skip if already exists
+        if item["source_url"] in existing_urls:
+            continue
+        
+        combined_text = f"{item['title']} {item['summary']}"
+        label, score, raw = analyze_sentiment(combined_text)
+
+        record = {
+            "title": item["title"],
+            "summary": item["summary"],
+            "source": item["source"],
+            "source_url": item["source_url"],
+            "sentiment_label": label,
+            "sentiment_score": raw['score'],
+            "raw_model_output": raw,
+            "created_at": datetime.utcnow().isoformat(),
+            "image_url": item.get("image_url"),
+            "published_at": item.get("published_at"),
+            "category": get_category(item["source_url"], item["title"], item["summary"]),
+        }
+
+        insert_article(record)
+        saved.append(record)
+        print(f"✓ Inserted: {item['title'][:50]}...")
+
+    print(f"Done! Inserted {len(saved)} new articles")
+    return {"inserted": len(saved), "skipped": len(articles) - len(saved)}
 
 
 # Get all categories
@@ -393,4 +323,36 @@ def get_articles_paginated(page_num: int, category: str = None, limit: int = 50)
 
     return {
         "articles": result.data
+    }
+
+
+# Search articles by keyword (searches title and summary)
+@app.get("/search")
+def search_articles(q: str, page: int = 0, limit: int = 50):
+    """
+    Search articles by keyword in title or summary.
+    Returns newest matches first.
+    """
+    if not q or len(q.strip()) < 2:
+        return {"articles": [], "query": q, "count": 0}
+    
+    search_term = q.strip().lower()
+    offset = page * limit
+    
+    # Search in title OR summary using ilike (case-insensitive)
+    result = (
+        supabase.table("articles")
+        .select("*", count="exact")
+        .or_(f"title.ilike.%{search_term}%,summary.ilike.%{search_term}%")
+        .order("published_at", desc=True)
+        .range(offset, offset + limit - 1)
+        .execute()
+    )
+    
+    return {
+        "articles": result.data,
+        "query": q,
+        "count": result.count,
+        "page": page,
+        "has_more": (offset + limit) < (result.count or 0)
     }
