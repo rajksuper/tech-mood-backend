@@ -11,3 +11,4 @@ pydantic
 beautifulsoup4
 apscheduler
 pytz
+openai

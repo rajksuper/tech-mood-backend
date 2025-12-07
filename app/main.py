@@ -7,8 +7,17 @@ from datetime import datetime, timedelta
 import random
 from collections import Counter
 import re
+import os
+from openai import OpenAI
+from dotenv import load_dotenv
+
+# Load .env file for local development
+load_dotenv()
 
 app = FastAPI()
+
+# Initialize OpenAI client
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # CORS
 app.add_middleware(
@@ -326,20 +335,52 @@ def get_articles_paginated(page_num: int, category: str = None, limit: int = 50)
     }
 
 
-# Search articles by keyword (searches title and summary)
-@app.get("/search")
-def search_articles(q: str, page: int = 0, limit: int = 50):
-    """
-    Search articles by keyword in title or summary.
-    Returns newest matches first.
-    """
-    if not q or len(q.strip()) < 2:
-        return {"articles": [], "query": q, "count": 0}
-    
-    search_term = q.strip().lower()
-    offset = page * limit
-    
-    # Search in title OR summary using ilike (case-insensitive)
+# Helper function to fix query using OpenAI
+def ai_fix_query(query):
+    """Use OpenAI to interpret unclear queries, fix typos, extract keywords"""
+    try:
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",  # Using gpt-4o-mini - reliable and cheap
+            messages=[{
+                "role": "system",
+                "content": """You fix search queries for a tech news database. 
+Your ONLY job is to output a clean search keyword.
+
+Rules:
+1. Fix typos: bitcoins→bitcoin, nviidia→nvidia, etherium→ethereum
+2. Extract main keyword from sentences: "what's happening with bitcoin today?"→bitcoin
+3. Convert tickers: TSLA→tesla, AAPL→apple, NVDA→nvidia, BTC→bitcoin, ETH→ethereum
+4. Output ONLY 1-2 lowercase words, nothing else
+5. No punctuation, no explanation, just the keyword
+
+Examples:
+bitcoins → bitcoin
+nviidia → nvidia  
+TSLA stock news → tesla
+Show me some nvidia news → nvidia
+what's happening with bitcoin → bitcoin
+latest on etherium → ethereum"""
+            }, {
+                "role": "user", 
+                "content": query
+            }],
+            max_tokens=10,
+            temperature=0
+        )
+        result = response.choices[0].message.content.strip().lower()
+        # Remove any quotes or extra characters
+        result = result.replace('"', '').replace("'", "").strip()
+        print(f"AI processed: '{query}' → '{result}'")
+        return result
+    except Exception as e:
+        print(f"OpenAI error: {e}")
+        # Fallback: just return lowercase original
+        return query.lower().strip()
+
+
+# Helper function to search database
+def search_database(search_term, offset, limit):
+    """Search articles in database"""
     result = (
         supabase.table("articles")
         .select("*", count="exact")
@@ -348,11 +389,45 @@ def search_articles(q: str, page: int = 0, limit: int = 50):
         .range(offset, offset + limit - 1)
         .execute()
     )
+    return result
+
+
+# Search articles by keyword (searches title and summary)
+@app.get("/search")
+def search_articles(q: str, page: int = 0, limit: int = 50):
+    """
+    Smart search with AI-powered query processing.
+    Always uses GPT-5-nano to:
+    - Fix typos (nviidia → nvidia)
+    - Extract keywords from long queries
+    - Handle stock tickers (TSLA → tesla)
+    """
+    if not q or len(q.strip()) < 2:
+        return {"articles": [], "query": q, "count": 0, "ai_corrected": False}
+    
+    original_query = q.strip()
+    offset = page * limit
+    
+    # Always use AI to process query (only on first page to save on pagination)
+    if page == 0:
+        print(f"Processing query with AI: {original_query}")
+        corrected_term = ai_fix_query(original_query)
+        print(f"AI result: {original_query} → {corrected_term}")
+    else:
+        # For pagination, use the query as-is (already corrected on page 0)
+        corrected_term = original_query.lower()
+    
+    ai_corrected = corrected_term.lower() != original_query.lower()
+    
+    # Search database with AI-processed query
+    result = search_database(corrected_term, offset, limit)
     
     return {
         "articles": result.data,
-        "query": q,
+        "query": original_query,
+        "corrected_query": corrected_term if ai_corrected else None,
         "count": result.count,
         "page": page,
-        "has_more": (offset + limit) < (result.count or 0)
+        "has_more": (offset + limit) < (result.count or 0),
+        "ai_corrected": ai_corrected
     }
