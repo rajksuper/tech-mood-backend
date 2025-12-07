@@ -162,6 +162,20 @@ RSS_FEEDS = [
     # --- Crypto / Web3 ---
     "https://www.coindesk.com/arc/outboundfeeds/rss/",
     "https://cointelegraph.com/rss",
+    "https://decrypt.co/feed",
+    "https://bitcoinmagazine.com/.rss/full/",
+    "https://thedefiant.io/feed",
+    "https://www.theblock.co/rss.xml",
+    "https://cryptoslate.com/feed/",
+    "https://cryptopotato.com/feed/",
+    
+    # --- Stock Market / Tech Stocks ---
+    "https://www.investors.com/feed/",
+    "https://www.fool.com/feeds/index.aspx",
+    "https://stocknews.com/feed/",
+    "https://www.benzinga.com/feed",
+    "https://finance.yahoo.com/rss/topstories",
+    "https://www.investing.com/rss/news.rss",
 ]
 
 
@@ -172,25 +186,50 @@ RSS_FEEDS = [
 def fetch_single_feed(url):
     """Fetch a single RSS feed and return articles"""
     try:
+        # Add timeout to prevent hanging on slow feeds
+        import urllib.request
+        urllib.request.urlopen(url, timeout=10)  # Quick check if URL is reachable
+        
         feed = feedparser.parse(url)
         articles = []
+        skipped = 0
+        
+        # Check if feed has entries
+        if not feed.entries:
+            print(f"⚠ No entries found: {url}")
+            return []
 
         for entry in feed.entries:
             title_raw = entry.get("title", "")
             summary_raw = entry.get("summary", "") or entry.get("description", "")
+            link = entry.get("link", "")
+            
+            # Skip if missing required fields
+            if not title_raw or not link:
+                skipped += 1
+                continue
+            
+            # Clean the data
+            title_clean = clean_html(title_raw).strip()
+            summary_clean = truncate(clean_html(summary_raw)).strip()
+            
+            # Skip if title is too short (likely junk)
+            if len(title_clean) < 10:
+                skipped += 1
+                continue
 
             article = {
-                "title": clean_html(title_raw),
-                "summary": truncate(clean_html(summary_raw)),
+                "title": title_clean,
+                "summary": summary_clean,
                 "source": feed.feed.get("title", "Unknown"),
-                "source_url": entry.get("link", ""),
+                "source_url": link,
                 "image_url": extract_image(entry),
                 "published_at": entry.get("published", "") or entry.get("updated", "") or "",
             }
 
             articles.append(article)
 
-        print(f"✓ Fetched {len(articles)} from {feed.feed.get('title', url)}")
+        print(f"✓ Fetched {len(articles)} from {feed.feed.get('title', url)} (skipped {skipped})")
         return articles
 
     except Exception as e:
@@ -205,17 +244,30 @@ def fetch_single_feed(url):
 def fetch_articles():
     """Fetch all RSS feeds in parallel"""
     all_articles = []
+    failed_feeds = []
 
     print(f"Fetching {len(RSS_FEEDS)} RSS feeds in parallel...")
 
     # Fetch feeds in parallel (10 workers at a time)
     with ThreadPoolExecutor(max_workers=10) as executor:
-        results = executor.map(fetch_single_feed, RSS_FEEDS)
+        results = list(executor.map(fetch_single_feed, RSS_FEEDS))
         
-        for articles in results:
-            all_articles.extend(articles)
+        for i, articles in enumerate(results):
+            if articles:
+                all_articles.extend(articles)
+            else:
+                failed_feeds.append(RSS_FEEDS[i])
 
+    print(f"\n===== FETCH SUMMARY =====")
     print(f"Total articles fetched: {len(all_articles)}")
+    print(f"Successful feeds: {len(RSS_FEEDS) - len(failed_feeds)}/{len(RSS_FEEDS)}")
+    if failed_feeds:
+        print(f"Failed feeds ({len(failed_feeds)}):")
+        for feed in failed_feeds[:5]:  # Show first 5
+            print(f"  - {feed}")
+        if len(failed_feeds) > 5:
+            print(f"  ... and {len(failed_feeds) - 5} more")
+    print(f"=========================\n")
 
     # Mix all sources so they aren't grouped
     random.shuffle(all_articles)

@@ -87,6 +87,21 @@ FEED_CATEGORIES = {
     "ft.com": "Markets & Finance",
     "coindesk.com": "Markets & Finance",
     "cointelegraph.com": "Markets & Finance",
+    
+    # New Crypto feeds
+    "decrypt.co": "Markets & Finance",
+    "bitcoinmagazine.com": "Markets & Finance",
+    "thedefiant.io": "Markets & Finance",
+    "theblock.co": "Markets & Finance",
+    "cryptoslate.com": "Markets & Finance",
+    "cryptopotato.com": "Markets & Finance",
+    
+    # New Stock Market feeds
+    "investors.com": "Markets & Finance",
+    "fool.com": "Markets & Finance",
+    "stocknews.com": "Markets & Finance",
+    "benzinga.com": "Markets & Finance",
+    "investing.com": "Markets & Finance",
 }
 
 
