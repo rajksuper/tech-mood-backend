@@ -355,44 +355,36 @@ def ai_fix_query(query):
     """Use OpenAI to interpret unclear queries, fix typos, extract keywords"""
     try:
         response = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4o-mini",  # Using gpt-4o-mini - reliable and cheap
             messages=[{
                 "role": "system",
-                "content": """You fix search queries for a tech news database.
-Your job is to output clean search keywords (1-4 words).
+                "content": """You fix search queries for a tech news database. 
+Your ONLY job is to output a clean search keyword.
 
 Rules:
-1. Fix typos: bitcoins→bitcoin, nviidia→nvidia, etherium→ethereum, aplle→apple
-2. Extract important keywords from sentences (keep 1-4 most relevant words)
+1. Fix typos: bitcoins→bitcoin, nviidia→nvidia, etherium→ethereum
+2. Extract main keyword from sentences: "what's happening with bitcoin today?"→bitcoin
 3. Convert tickers: TSLA→tesla, AAPL→apple, NVDA→nvidia, BTC→bitcoin, ETH→ethereum
-4. Output ONLY lowercase words separated by spaces
-5. No punctuation, no explanation, just the keywords
-6. Remove filler words (what, the, is, how, about, with, etc.)
+4. Output ONLY 1-2 lowercase words, nothing else
+5. No punctuation, no explanation, just the keyword
 
 Examples:
-bitcoins price → bitcoin price
-nviidia earnings → nvidia earnings
-TSLA stock news → tesla stock
-what's happening with bitcoin today → bitcoin
-latest on etherium price → ethereum price
-apple stocks falling → apple stocks
-show me nvidia gpu news → nvidia gpu
-how is tesla doing → tesla
-whats up with openai → openai
-bitcoin and ethereum news → bitcoin ethereum"""
+bitcoins → bitcoin
+nviidia → nvidia  
+TSLA stock news → tesla
+Show me some nvidia news → nvidia
+what's happening with bitcoin → bitcoin
+latest on etherium → ethereum"""
             }, {
                 "role": "user", 
                 "content": query
             }],
-            max_tokens=20,
+            max_tokens=10,
             temperature=0
         )
         result = response.choices[0].message.content.strip().lower()
         # Remove any quotes or extra characters
         result = result.replace('"', '').replace("'", "").strip()
-        # Limit to max 4 words
-        words = result.split()[:4]
-        result = " ".join(words)
         print(f"AI processed: '{query}' → '{result}'")
         return result
     except Exception as e:
@@ -403,35 +395,15 @@ bitcoin and ethereum news → bitcoin ethereum"""
 
 # Helper function to search database
 def search_database(search_term, offset, limit):
-    """Search articles in database - supports multiple keywords with AND logic"""
-    keywords = search_term.split()
-    
-    if len(keywords) == 1:
-        # Single keyword - original behavior
-        result = (
-            supabase.table("articles")
-            .select("*", count="exact")
-            .or_(f"title.ilike.%{search_term}%,summary.ilike.%{search_term}%")
-            .order("published_at", desc=True)
-            .range(offset, offset + limit - 1)
-            .execute()
-        )
-    else:
-        # Multiple keywords - search for ALL keywords (AND logic)
-        # Build filter: each keyword must appear in title OR summary
-        query = supabase.table("articles").select("*", count="exact")
-        
-        for keyword in keywords:
-            # Each keyword must be in title OR summary
-            query = query.or_(f"title.ilike.%{keyword}%,summary.ilike.%{keyword}%")
-        
-        result = (
-            query
-            .order("published_at", desc=True)
-            .range(offset, offset + limit - 1)
-            .execute()
-        )
-    
+    """Search articles in database"""
+    result = (
+        supabase.table("articles")
+        .select("*", count="exact")
+        .or_(f"title.ilike.%{search_term}%,summary.ilike.%{search_term}%")
+        .order("published_at", desc=True)
+        .range(offset, offset + limit - 1)
+        .execute()
+    )
     return result
 
 
