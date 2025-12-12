@@ -300,6 +300,44 @@ def get_trending():
     return {"trending": [{"keyword": k.capitalize(), "count": c} for k, c in top_keywords[:10]]}
 
 
+# Autocomplete - suggest keywords as user types
+@app.get("/autocomplete")
+def autocomplete(q: str):
+    """Return keyword suggestions based on article titles"""
+    if not q or len(q) < 2:
+        return {"suggestions": []}
+    
+    search_term = q.lower().strip()
+    
+    # Search for titles containing the search term
+    result = (
+        supabase.table("articles")
+        .select("title")
+        .ilike("title", f"%{search_term}%")
+        .order("published_at", desc=True)
+        .limit(100)
+        .execute()
+    )
+    
+    # Extract unique keywords from titles that match
+    keywords = {}
+    stop_words = {"the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by", "is", "are", "was", "were", "be", "been", "has", "have", "had", "do", "does", "did", "will", "would", "could", "should", "it", "its", "this", "that", "these", "those", "as", "from", "into", "about", "how", "what", "when", "where", "who", "why", "which", "new", "says", "said"}
+    
+    for article in result.data:
+        title = article["title"].lower()
+        # Find words that start with the search term
+        words = re.findall(r'\b([a-z]+)\b', title)
+        for word in words:
+            if word.startswith(search_term) and word not in stop_words and len(word) >= 3:
+                keywords[word] = keywords.get(word, 0) + 1
+    
+    # Sort by frequency and return top 5
+    sorted_keywords = sorted(keywords.items(), key=lambda x: x[1], reverse=True)
+    suggestions = [k for k, v in sorted_keywords[:5]]
+    
+    return {"suggestions": suggestions}
+
+
 # Get total article count (for pagination)
 @app.get("/articles/count")
 def get_article_count(category: str = None):
@@ -398,85 +436,92 @@ def get_articles_paginated(page_num: int, category: str = None, limit: int = 50)
 
 # Helper function to fix query using OpenAI
 def ai_fix_query(query):
-    """Use OpenAI to interpret unclear queries, fix typos, extract keywords"""
+    """Use OpenAI to interpret unclear queries, fix typos, extract single keyword"""
     try:
         response = openai_client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{
                 "role": "system",
                 "content": """You fix search queries for a tech news database.
-Your job is to output clean search keywords (1-4 words).
+Your job is to output ONE clean search keyword (the most important word).
 
 Rules:
 1. Fix typos: bitcoins→bitcoin, nviidia→nvidia, etherium→ethereum, aplle→apple
-2. Extract important keywords from sentences (keep 1-4 most relevant words)
+2. Extract the MOST IMPORTANT keyword from the query (just 1 word)
 3. Convert tickers: TSLA→tesla, AAPL→apple, NVDA→nvidia, BTC→bitcoin, ETH→ethereum
-4. Output ONLY lowercase words separated by spaces
-5. No punctuation, no explanation, just the keywords
-6. Remove filler words (what, the, is, how, about, with, etc.)
+4. Output ONLY 1 lowercase word, nothing else
+5. No punctuation, no explanation, just the keyword
+6. Prioritize: company names > crypto names > tech terms > generic words
 
 Examples:
-bitcoins price → bitcoin price
-nviidia earnings → nvidia earnings
-TSLA stock news → tesla stock
+bitcoins price → bitcoin
+tesla stock → tesla
+nviidia earnings → nvidia
+TSLA stock news → tesla
 what's happening with bitcoin today → bitcoin
-latest on etherium price → ethereum price
-apple stocks falling → apple stocks
-show me nvidia gpu news → nvidia gpu
+latest on etherium price → ethereum
+apple stocks falling → apple
+show me nvidia gpu news → nvidia
 how is tesla doing → tesla
 whats up with openai → openai
-bitcoin and ethereum news → bitcoin ethereum"""
+bitcoin and ethereum → bitcoin
+microsoft earnings report → microsoft
+google stock price → google"""
             }, {
                 "role": "user", 
                 "content": query
             }],
-            max_tokens=20,
+            max_tokens=10,
             temperature=0
         )
         result = response.choices[0].message.content.strip().lower()
         # Remove any quotes or extra characters
         result = result.replace('"', '').replace("'", "").strip()
-        # Limit to max 4 words
-        words = result.split()[:4]
-        result = " ".join(words)
+        # Take only first word if multiple returned
+        result = result.split()[0] if result.split() else result
         print(f"AI processed: '{query}' → '{result}'")
         return result
     except Exception as e:
         print(f"OpenAI error: {e}")
-        # Fallback: just return lowercase original
-        return query.lower().strip()
+        # Fallback: just return first word lowercase
+        words = query.lower().strip().split()
+        return words[0] if words else query.lower().strip()
+
+
+# Helper function to get word variations (singular/plural)
+def get_word_variations(word):
+    """Return list of word variations for better matching"""
+    variations = [word]
+    
+    # Common singular/plural patterns
+    if word.endswith('s') and len(word) > 3:
+        variations.append(word[:-1])  # stocks -> stock
+    else:
+        variations.append(word + 's')  # stock -> stocks
+    
+    return list(set(variations))
 
 
 # Helper function to search database
 def search_database(search_term, offset, limit):
-    """Search articles in database - supports multiple keywords with AND logic"""
-    keywords = search_term.split()
+    """Search articles in database with word variations"""
+    # Get variations of the search term
+    variations = get_word_variations(search_term)
     
-    if len(keywords) == 1:
-        # Single keyword - original behavior
-        result = (
-            supabase.table("articles")
-            .select("*", count="exact")
-            .or_(f"title.ilike.%{search_term}%,summary.ilike.%{search_term}%")
-            .order("published_at", desc=True)
-            .range(offset, offset + limit - 1)
-            .execute()
-        )
-    else:
-        # Multiple keywords - search for ALL keywords (AND logic)
-        # Build filter: each keyword must appear in title OR summary
-        query = supabase.table("articles").select("*", count="exact")
-        
-        for keyword in keywords:
-            # Each keyword must be in title OR summary
-            query = query.or_(f"title.ilike.%{keyword}%,summary.ilike.%{keyword}%")
-        
-        result = (
-            query
-            .order("published_at", desc=True)
-            .range(offset, offset + limit - 1)
-            .execute()
-        )
+    # Build OR conditions for all variations
+    conditions = []
+    for var in variations:
+        conditions.append(f"title.ilike.%{var}%")
+        conditions.append(f"summary.ilike.%{var}%")
+    
+    result = (
+        supabase.table("articles")
+        .select("*", count="exact")
+        .or_(",".join(conditions))
+        .order("published_at", desc=True)
+        .range(offset, offset + limit - 1)
+        .execute()
+    )
     
     return result
 
