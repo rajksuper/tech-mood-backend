@@ -370,13 +370,16 @@ def get_articles(category: str = None, limit: int = 50):
 
 # Articles WITH images - paginated
 @app.get("/articles/images")
-def get_articles_with_images(page: int = 0, limit: int = 12, category: str = None):
+def get_articles_with_images(page: int = 0, limit: int = 12, category: str = None, source: str = None):
     offset = page * limit
     
     query = supabase.table("articles").select("*", count="exact")
     
     if category:
         query = query.eq("category", category)
+    
+    if source:
+        query = query.ilike("source_url", f"%{source}%")
     
     # Filter for articles WITH images
     query = query.neq("image_url", None).neq("image_url", "")
@@ -393,13 +396,16 @@ def get_articles_with_images(page: int = 0, limit: int = 12, category: str = Non
 
 # Articles WITHOUT images - paginated
 @app.get("/articles/text")
-def get_articles_without_images(page: int = 0, limit: int = 12, category: str = None):
+def get_articles_without_images(page: int = 0, limit: int = 12, category: str = None, source: str = None):
     offset = page * limit
     
     query = supabase.table("articles").select("*", count="exact")
     
     if category:
         query = query.eq("category", category)
+    
+    if source:
+        query = query.ilike("source_url", f"%{source}%")
     
     # Filter for articles WITHOUT images (null or empty)
     query = query.or_("image_url.is.null,image_url.eq.")
