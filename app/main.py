@@ -302,7 +302,7 @@ def get_trending():
 
 # Daily Summary - For Twitter/Social Media posts
 @app.get("/daily-summary")
-def daily_summary(hours: int = 24, top: int = 1):
+def daily_summary(hours: int = 24, top: int = 3):
     """Generate daily summary for social media posting"""
     
     # Get time threshold
@@ -316,50 +316,72 @@ def daily_summary(hours: int = 24, top: int = 1):
         .execute()
     )
     
-    # Count sentiments
-    sentiment_counts = {"POSITIVE": 0, "NEGATIVE": 0, "NEUTRAL": 0, "MIXED": 0}
+    # Count sentiments (handle both upper and lowercase)
+    sentiment_counts = {"positive": 0, "negative": 0, "neutral": 0, "mixed": 0}
     for article in result.data:
-        label = article.get("sentiment_label", "NEUTRAL")
+        label = article.get("sentiment_label", "neutral").lower()
         if label in sentiment_counts:
             sentiment_counts[label] += 1
     
-    # Get latest articles
-    latest = (
+    # Get latest articles with images first, then without
+    latest_with_images = (
         supabase.table("articles")
-        .select("title, sentiment_label, source_url")
+        .select("title, sentiment_label, image_url")
         .gte("published_at", time_threshold.isoformat())
+        .neq("image_url", None)
+        .neq("image_url", "")
         .order("published_at", desc=True)
         .limit(top)
         .execute()
     )
     
     latest_articles = []
-    for article in latest.data:
+    featured_image = None
+    
+    for article in latest_with_images.data:
+        title = article["title"][:60] + "..." if len(article["title"]) > 60 else article["title"]
         latest_articles.append({
-            "title": article["title"][:80] + "..." if len(article["title"]) > 80 else article["title"],
-            "sentiment": article["sentiment_label"]
+            "title": title,
+            "sentiment": article["sentiment_label"],
+            "image_url": article.get("image_url")
         })
+        # Use first image as featured
+        if not featured_image and article.get("image_url"):
+            featured_image = article["image_url"]
+    
+    # If not enough articles with images, get more without
+    if len(latest_articles) < top:
+        remaining = top - len(latest_articles)
+        latest_no_images = (
+            supabase.table("articles")
+            .select("title, sentiment_label")
+            .gte("published_at", time_threshold.isoformat())
+            .or_("image_url.is.null,image_url.eq.")
+            .order("published_at", desc=True)
+            .limit(remaining)
+            .execute()
+        )
+        for article in latest_no_images.data:
+            title = article["title"][:60] + "..." if len(article["title"]) > 60 else article["title"]
+            latest_articles.append({
+                "title": title,
+                "sentiment": article["sentiment_label"],
+                "image_url": None
+            })
     
     # Generate tweet text
     today = datetime.utcnow().strftime("%b %d")
     
-    sentiment_emojis = {
-        "POSITIVE": "🟢",
-        "NEGATIVE": "🔴", 
-        "NEUTRAL": "🟡",
-        "MIXED": "🟣"
-    }
+    # Build tweet - compact sentiment line
+    p = sentiment_counts["positive"]
+    n = sentiment_counts["negative"]
+    u = sentiment_counts["neutral"]
+    m = sentiment_counts["mixed"]
     
-    # Build tweet
-    tweet = f"📊 Tech Mood ({today})\n\n"
+    tweet = f"🟢{p} 🔴{n} 🟡{u} 🟣{m}\n\n"
     
-    for sentiment, count in sentiment_counts.items():
-        if count > 0:
-            emoji = sentiment_emojis.get(sentiment, "⚪")
-            tweet += f"{emoji} {sentiment.capitalize()}: {count}\n"
-    
-    if latest_articles:
-        tweet += f"\nLatest: \"{latest_articles[0]['title']}\"\n"
+    for article in latest_articles[:3]:
+        tweet += f"• {article['title']}\n"
     
     tweet += "\ntechsentiments.com"
     
@@ -367,6 +389,7 @@ def daily_summary(hours: int = 24, top: int = 1):
         "sentiment_counts": sentiment_counts,
         "total_articles": sum(sentiment_counts.values()),
         "latest_articles": latest_articles,
+        "featured_image": featured_image,
         "tweet_text": tweet,
         "tweet_length": len(tweet)
     }
