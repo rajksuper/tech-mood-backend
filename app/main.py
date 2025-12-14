@@ -300,6 +300,78 @@ def get_trending():
     return {"trending": [{"keyword": k.capitalize(), "count": c} for k, c in top_keywords[:10]]}
 
 
+# Daily Summary - For Twitter/Social Media posts
+@app.get("/daily-summary")
+def daily_summary(hours: int = 24, top: int = 1):
+    """Generate daily summary for social media posting"""
+    
+    # Get time threshold
+    time_threshold = datetime.utcnow() - timedelta(hours=hours)
+    
+    # Get sentiment counts
+    result = (
+        supabase.table("articles")
+        .select("sentiment_label")
+        .gte("published_at", time_threshold.isoformat())
+        .execute()
+    )
+    
+    # Count sentiments
+    sentiment_counts = {"POSITIVE": 0, "NEGATIVE": 0, "NEUTRAL": 0, "MIXED": 0}
+    for article in result.data:
+        label = article.get("sentiment_label", "NEUTRAL")
+        if label in sentiment_counts:
+            sentiment_counts[label] += 1
+    
+    # Get latest articles
+    latest = (
+        supabase.table("articles")
+        .select("title, sentiment_label, source_url")
+        .gte("published_at", time_threshold.isoformat())
+        .order("published_at", desc=True)
+        .limit(top)
+        .execute()
+    )
+    
+    latest_articles = []
+    for article in latest.data:
+        latest_articles.append({
+            "title": article["title"][:80] + "..." if len(article["title"]) > 80 else article["title"],
+            "sentiment": article["sentiment_label"]
+        })
+    
+    # Generate tweet text
+    today = datetime.utcnow().strftime("%b %d")
+    
+    sentiment_emojis = {
+        "POSITIVE": "🟢",
+        "NEGATIVE": "🔴", 
+        "NEUTRAL": "🟡",
+        "MIXED": "🟣"
+    }
+    
+    # Build tweet
+    tweet = f"📊 Tech Mood ({today})\n\n"
+    
+    for sentiment, count in sentiment_counts.items():
+        if count > 0:
+            emoji = sentiment_emojis.get(sentiment, "⚪")
+            tweet += f"{emoji} {sentiment.capitalize()}: {count}\n"
+    
+    if latest_articles:
+        tweet += f"\nLatest: \"{latest_articles[0]['title']}\"\n"
+    
+    tweet += "\ntechsentiments.com"
+    
+    return {
+        "sentiment_counts": sentiment_counts,
+        "total_articles": sum(sentiment_counts.values()),
+        "latest_articles": latest_articles,
+        "tweet_text": tweet,
+        "tweet_length": len(tweet)
+    }
+
+
 # Autocomplete - suggest keywords as user types
 @app.get("/autocomplete")
 def autocomplete(q: str):
