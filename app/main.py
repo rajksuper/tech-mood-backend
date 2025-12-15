@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from app.rss_fetcher import fetch_articles
 from app.sentiment import analyze_sentiment
 from app.supabase_client import insert_article, supabase
@@ -632,7 +633,7 @@ def search_database(search_term, offset, limit):
 def search_articles(q: str, page: int = 0, limit: int = 50):
     """
     Smart search with AI-powered query processing.
-    Always uses GPT-5-nano to:
+    Always uses GPT-4o-mini to:
     - Fix typos (nviidia → nvidia)
     - Extract keywords from long queries
     - Handle stock tickers (TSLA → tesla)
@@ -666,3 +667,50 @@ def search_articles(q: str, page: int = 0, limit: int = 50):
         "has_more": (offset + limit) < (result.count or 0),
         "ai_corrected": ai_corrected
     }
+
+
+# ===========================================
+# SUBSCRIBER ENDPOINTS
+# ===========================================
+
+class SubscribeRequest(BaseModel):
+    email: str
+
+
+@app.post("/subscribe")
+def subscribe(request: SubscribeRequest):
+    """
+    Subscribe endpoint - saves email to Supabase
+    """
+    email = request.email.strip().lower()
+    
+    # Basic validation
+    if not email or "@" not in email:
+        return {"success": False, "message": "Invalid email address"}
+    
+    try:
+        # Check if already subscribed
+        existing = supabase.table("subscribers").select("id").eq("email", email).execute()
+        
+        if existing.data:
+            return {"success": True, "message": "You're already subscribed!"}
+        
+        # Insert new subscriber
+        supabase.table("subscribers").insert({
+            "email": email,
+            "created_at": datetime.utcnow().isoformat(),
+            "source": "website_footer"
+        }).execute()
+        
+        return {"success": True, "message": "Thanks for subscribing!"}
+    
+    except Exception as e:
+        print(f"Subscribe error: {e}")
+        return {"success": False, "message": "Something went wrong. Please try again."}
+
+
+@app.get("/subscribers")
+def get_subscribers():
+    """Get all subscribers (admin endpoint)"""
+    result = supabase.table("subscribers").select("*").order("created_at", desc=True).execute()
+    return {"subscribers": result.data, "count": len(result.data)}
